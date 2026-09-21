@@ -1,8 +1,5 @@
 
-import io
 import os, re, time, shutil, sqlite3, gc, json
-import tempfile
-import zipfile
 from pathlib import Path
 from datetime import datetime
 
@@ -38,74 +35,6 @@ REPO_KBO_RECORDS = APP_DIR / "kbo_2026_records.xlsx"
 UPLOADED_KBO_PLAYER_RECORDS = DATA_DIR / "kbo_player_records.xlsx"
 UPLOADED_KBO_TEAM_RECORDS = DATA_DIR / "kbo_team_records.xlsx"
 KBO_META_PATH = DATA_DIR / "kbo_metadata.json"
-
-
-# 임시 백업 기능: Render 유료 디스크를 해지하기 전에 /var/data의
-# SQLite 데이터와 함께 갱신된 기록 파일을 ZIP으로 내려받습니다.
-# 백업을 마친 뒤에는 이 함수와 데이터 화면의 백업 영역을 삭제해도 됩니다.
-def create_persistent_data_backup():
-    if not DATA_DIR.exists():
-        return None, []
-
-    source_files = [
-        path for path in DATA_DIR.rglob("*")
-        if path.is_file()
-        and not path.name.endswith(("-wal", "-shm"))
-        and ".uploading" not in path.name
-    ]
-
-    if not source_files:
-        return None, []
-
-    backup_buffer = io.BytesIO()
-    included_files = []
-
-    with tempfile.TemporaryDirectory() as temp_dir_name:
-        temp_dir = Path(temp_dir_name)
-
-        with zipfile.ZipFile(
-            backup_buffer,
-            mode="w",
-            compression=zipfile.ZIP_DEFLATED,
-        ) as backup_zip:
-            for index, source_path in enumerate(source_files):
-                relative_path = source_path.relative_to(DATA_DIR)
-                archive_path = Path("data") / relative_path
-
-                if source_path.suffix.lower() in {".db", ".sqlite", ".sqlite3"}:
-                    snapshot_path = temp_dir / f"sqlite_snapshot_{index}{source_path.suffix}"
-                    source_db = sqlite3.connect(
-                        f"file:{source_path.as_posix()}?mode=ro",
-                        uri=True,
-                    )
-                    snapshot_db = sqlite3.connect(snapshot_path)
-                    try:
-                        source_db.backup(snapshot_db)
-                    finally:
-                        snapshot_db.close()
-                        source_db.close()
-                    backup_zip.write(snapshot_path, arcname=archive_path.as_posix())
-                else:
-                    backup_zip.write(source_path, arcname=archive_path.as_posix())
-
-                included_files.append(archive_path.as_posix())
-
-            manifest_lines = [
-                "KBO Data Dugout persistent data backup",
-                f"Created: {datetime.now().isoformat(timespec='seconds')}",
-                f"Original data directory: {DATA_DIR}",
-                "",
-                "Included files:",
-                *included_files,
-                "",
-                "Restore each file to the same relative path under /var/data.",
-            ]
-            backup_zip.writestr(
-                "backup_manifest.txt",
-                "\n".join(manifest_lines),
-            )
-
-    return backup_buffer.getvalue(), included_files
 
 TEAM = {
     "KT":"KT","LG":"LG","SS":"삼성","OB":"두산","HT":"KIA",
@@ -2349,46 +2278,6 @@ elif nav == "데이터":
                 st.success("Play-by-Play 자료 업데이트가 완료되었습니다.")
                 st.caption(f"자료 기간: {uploaded_stats['period'] or '-'}")
         except Exception as e: st.error(f"Parquet 파일을 읽지 못했습니다: {e}")
-
-    st.divider()
-    st.markdown(
-        '<div class="data-section-title">④ 웹앱 데이터 백업</div>',
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        "Render 유료 디스크를 해지하기 전에 신규 경기, 관심 선수·팀 및 "
-        "갱신된 기록 파일을 ZIP으로 저장합니다."
-    )
-
-    if st.button(
-        "백업 파일 만들기",
-        key="prepare_persistent_data_backup",
-        use_container_width=True,
-    ):
-        try:
-            with st.spinner("백업 파일을 만드는 중입니다..."):
-                backup_bytes, backup_names = create_persistent_data_backup()
-
-            if backup_bytes:
-                st.session_state["persistent_backup_bytes"] = backup_bytes
-                st.session_state["persistent_backup_names"] = backup_names
-                st.success("백업 파일을 만들었습니다. 아래 버튼을 눌러 저장해 주세요.")
-            else:
-                st.warning("백업할 데이터 파일을 찾지 못했습니다.")
-        except Exception as e:
-            st.error(f"백업 파일을 만들지 못했습니다: {e}")
-
-    if st.session_state.get("persistent_backup_bytes"):
-        st.download_button(
-            "백업 ZIP 다운로드",
-            data=st.session_state["persistent_backup_bytes"],
-            file_name="kbo-data-dugout-backup.zip",
-            mime="application/zip",
-            key="download_persistent_data_backup",
-            use_container_width=True,
-        )
-        backup_count = len(st.session_state.get("persistent_backup_names", []))
-        st.caption(f"백업 파일 {backup_count}개가 포함되어 있습니다.")
 
 elif nav == "팀":
     st.markdown(
